@@ -10,7 +10,7 @@ Godot 4.6 · GDScript · 3D 1인칭 · 한국어. 무료 Kenney CC0 에셋을 �
 ## 팀 작업 시작
 
 ```powershell
-git clone https://github.com/phj3137/stalker.git
+git clone https://github.com/AramZ-Studio/stalker.git
 cd stalker
 git switch -c feature/작업이름
 ```
