@@ -11,6 +11,9 @@ var peer_count := 0
 var variant := 0
 var clue_visible := false
 var mail := false
+var render_size := Vector2i(960, 340)
+var snapshot_viewport: SubViewport
+var capture_delay := 2
 
 func _init() -> void:
 	custom_minimum_size = Vector2(0, 250)
@@ -32,9 +35,21 @@ func visitor_model() -> Node3D:
 	var actor := Node3D.new()
 	box(actor, Vector3(0, 1.08, 0), Vector3(0.43, 0.62, 0.27), Color("252e35"))
 	for side in [-1.0, 1.0]:
-		box(actor, Vector3(side * 0.12, 0.43, 0), Vector3(0.17, 0.86, 0.2), Color("101b1e"))
-		box(actor, Vector3(side * 0.28, 1.04, 0), Vector3(0.14, 0.6, 0.18), Color("252e35"))
-		box(actor, Vector3(side * 0.12, 0.06, 0.09), Vector3(0.19, 0.12, 0.34), Color("101b1e"))
+		var leg := Node3D.new()
+		leg.name = "LegL" if side < 0 else "LegR"
+		leg.position = Vector3(side * 0.12, 0.86, 0)
+		actor.add_child(leg)
+		box(leg, Vector3(0, -0.43, 0), Vector3(0.17, 0.86, 0.2), Color("101b1e"))
+		box(leg, Vector3(0, -0.8, 0.09), Vector3(0.19, 0.12, 0.34), Color("101b1e"))
+		var arm := Node3D.new()
+		arm.name = "ArmL" if side < 0 else "ArmR"
+		arm.position = Vector3(side * 0.28, 1.32, 0)
+		actor.add_child(arm)
+		box(arm, Vector3(0, -0.28, 0), Vector3(0.14, 0.6, 0.18), Color("252e35"))
+	var head_pivot := Node3D.new()
+	head_pivot.name = "Head"
+	head_pivot.position = Vector3(0, 1.59, 0)
+	actor.add_child(head_pivot)
 	var head := MeshInstance3D.new()
 	var face := SphereMesh.new()
 	face.radius = 0.15
@@ -42,14 +57,13 @@ func visitor_model() -> Node3D:
 	face.radial_segments = 12
 	face.rings = 6
 	head.mesh = face
-	head.position = Vector3(0, 1.59, 0)
 	var skin := StandardMaterial3D.new()
 	skin.albedo_color = Color("b8b0a0")
 	skin.roughness = 1
 	head.material_override = skin
-	actor.add_child(head)
+	head_pivot.add_child(head)
 	for side in [-1.0, 1.0]:
-		box(actor, Vector3(side * 0.052, 1.63, 0.135), Vector3(0.045, 0.013, 0.025), Color("66716d"))
+		box(head_pivot, Vector3(side * 0.052, 0.04, 0.135), Vector3(0.045, 0.013, 0.025), Color("66716d"))
 	return actor
 
 func _ready() -> void:
@@ -60,13 +74,15 @@ func _ready() -> void:
 		filter.shader = preload("res://scripts/observation_filter.gdshader")
 		filter.set_shader_parameter("monitor", source == "인터폰")
 		filter.set_shader_parameter("peephole", source == "현관 렌즈")
+		filter.set_shader_parameter("aspect", size.x / maxf(size.y, 1))
 		material = filter
 		resized.connect(func(): filter.set_shader_parameter("aspect", size.x / maxf(size.y, 1)))
 	var viewport := SubViewport.new()
-	viewport.size = Vector2i(960, 340)
+	snapshot_viewport = viewport
+	viewport.size = render_size
 	viewport.own_world_3d = true
 	viewport.handle_input_locally = false
-	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(viewport)
 	var stage := Node3D.new()
 	viewport.add_child(stage)
@@ -117,6 +133,15 @@ func _ready() -> void:
 				scan.draw_line(Vector2(0, y), Vector2(scan.size.x, y), Color(0, 0, 0, 0.06))
 		scan.draw_rect(Rect2(Vector2.ZERO, scan.size), Color("9b635b") if source == "조우" else Color("82999a"), false, 2))
 	add_child(scan)
+
+func _process(_delta: float) -> void:
+	capture_delay -= 1
+	if capture_delay <= 0:
+		# Hierarchical limb transforms must reach the rendering server before freezing.
+		if is_instance_valid(snapshot_viewport) and is_visible_in_tree():
+			for node in snapshot_viewport.find_children("*", "Node3D", true, false): node.force_update_transform()
+			snapshot_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+		set_process(false)
 
 func build_corridor(stage: Node3D) -> void:
 	box(stage, Vector3(0, -0.12, -3), Vector3(5, 0.24, 14), Color("252e35"))

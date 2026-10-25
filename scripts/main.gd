@@ -5,6 +5,8 @@ const Observation = preload("res://scripts/observation_3d.gd")
 const Demo = preload("res://scripts/demo.gd")
 const DoorNight = preload("res://scripts/door_night.gd")
 const FullGame = preload("res://scripts/full_game.gd")
+const Presence = preload("res://scripts/presence.gd")
+var presence: Node
 var full: RefCounted
 var night: RefCounted
 var demo: RefCounted
@@ -14,6 +16,7 @@ var camera: Camera3D
 var hud: Label
 var prompt: Label
 var notice: Label
+var reticle: Label
 var modal: PanelContainer
 var content: VBoxContainer
 var shade: ColorRect
@@ -23,6 +26,10 @@ var ui: CanvasLayer
 var tone: AudioStreamPlayer
 var last_bell := ""
 var entrance_hinge: Node3D
+var door_handle: Node3D
+var door_lock: Node3D
+var intercom_surface: MeshInstance3D
+var window_surface: MeshInstance3D
 var mouse_sensitivity := 0.002
 var preferred_fov := 75.0
 var camera_motion := true
@@ -35,6 +42,9 @@ var retired_snapshots: Array[Dictionary] = []
 func _ready() -> void:
 	build_room()
 	build_ui()
+	presence = Presence.new()
+	add_child(presence)
+	presence.setup(self)
 	demo = Demo.new(self)
 	night = DoorNight.new(self)
 	full = FullGame.new(self)
@@ -59,6 +69,10 @@ func _ready() -> void:
 		call_deferred("test_upgrade")
 	elif "--capture-upgrade" in OS.get_cmdline_user_args():
 		call_deferred("capture_upgrade")
+	elif "--test-presence" in OS.get_cmdline_user_args():
+		call_deferred("test_presence")
+	elif "--capture-presence" in OS.get_cmdline_user_args():
+		call_deferred("capture_presence")
 
 func material(color: Color, glow: bool = false) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -117,8 +131,15 @@ func build_room() -> void:
 	block(Vector3(0, 3.1, 0), Vector3(10, 0.2, 10), Color("66716d"))
 	for x in [-5.0, 5.0]:
 		block(Vector3(x, 1.5, 0), Vector3(0.2, 3, 10), Color("66716d"))
-	for z in [-5.0, 5.0]:
-		block(Vector3(0, 1.5, z), Vector3(10, 3, 0.2), Color("66716d"))
+	block(Vector3(0, 1.5, 5), Vector3(10, 3, 0.2), Color("66716d"))
+	# Real doorway: the animated leaf opens onto a short dark corridor.
+	for side in [-1.0, 1.0]:
+		block(Vector3(side * 2.85, 1.5, -5), Vector3(4.3, 3, 0.2), Color("66716d"))
+		block(Vector3(side * 0.77, 1.23, -4.85), Vector3(0.1, 2.46, 0.2), Color("82999a"))
+		block(Vector3(side * 1.5, 1.5, -6.5), Vector3(0.15, 3, 3), Color("252e35"))
+	block(Vector3(0, 2.73, -5), Vector3(1.4, 0.54, 0.2), Color("66716d"))
+	block(Vector3(0, -0.15, -6.5), Vector3(3, 0.3, 3), Color("252e35"))
+	block(Vector3(0, 1.5, -8), Vector3(3, 3, 0.2), Color("101b1e"))
 	for i in range(20):
 		block(Vector3(-4.75 + i * 0.5, 0.008, 0), Vector3(0.015, 0.01, 10), Color("252a27"), false)
 	# Entry, intercom and peephole.
@@ -127,14 +148,25 @@ func build_room() -> void:
 	entrance_hinge.position = Vector3(-0.7, 0, -4.84)
 	add_child(entrance_hinge)
 	door.reparent(entrance_hinge, true)
-	block(Vector3(0.5, 1.0, -4.7), Vector3(0.12, 0.06, 0.08), Color("b3ab87"), false)
-	block(Vector3(0, 1.65, -4.7), Vector3(0.07, 0.07, 0.08), Color("869e92"), false, true)
+	door_handle = Node3D.new()
+	door_handle.position = Vector3(0.45, 1, -4.7)
+	add_child(door_handle)
+	block(Vector3(0.5, 1.0, -4.7), Vector3(0.15, 0.035, 0.05), Color("b8b0a0"), false).reparent(door_handle, true)
+	door_handle.reparent(entrance_hinge, true)
+	door_lock = Node3D.new()
+	door_lock.position = Vector3(0.45, 1.28, -4.7)
+	add_child(door_lock)
+	block(Vector3(0.45, 1.28, -4.7), Vector3(0.065, 0.025, 0.035), Color("82999a"), false).reparent(door_lock, true)
+	door_lock.reparent(entrance_hinge, true)
+	block(Vector3(0, 1.65, -4.7), Vector3(0.045, 0.045, 0.012), Color("66716d"), false).reparent(entrance_hinge, true)
 	station("현관", Vector3(0, 1.1, -4.6), Color("c2c5ac"))
 	block(Vector3(1.5, 1.5, -4.76), Vector3(0.42, 0.55, 0.17), Color("82999a"))
 	block(Vector3(1.5, 1.57, -4.65), Vector3(0.3, 0.22, 0.03), Color("426bc2"), false, true)
+	intercom_surface = screen_surface(Vector3(1.5, 1.57, -4.631), Vector2(0.3, 0.22))
 	block(Vector3(1.37, 1.31, -4.65), Vector3(0.025, 0.025, 0.03), Color("9b635b"), false, true)
 	station("인터폰", Vector3(1.5, 1.5, -4.5), Color("92c8b6"))
 	preload("res://scripts/furnished_room.gd").furnish(self)
+	window_surface = screen_surface(Vector3(3, 1.8, 4.65), Vector2(2.5, 1.3), PI)
 	for pos in [Vector3(0, 2.7, 0), Vector3(-3.3, 2.4, -3.6)]:
 		var light := OmniLight3D.new()
 		light.position = pos
@@ -160,6 +192,17 @@ func build_room() -> void:
 	camera.current = true
 	tone = AudioStreamPlayer.new()
 	add_child(tone)
+
+func screen_surface(pos: Vector3, size: Vector2, angle: float = 0) -> MeshInstance3D:
+	var result := MeshInstance3D.new()
+	var plane := QuadMesh.new()
+	plane.size = size
+	result.mesh = plane
+	result.material_override = material(Color("101b1e"))
+	result.position = pos
+	result.rotation.y = angle
+	add_child(result)
+	return result
 
 func style(bg: Color, border: Color, radius: int = 10) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
@@ -208,6 +251,7 @@ func build_ui() -> void:
 	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(prompt)
 	var dot := Label.new()
+	reticle = dot
 	dot.text = "·"
 	dot.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	dot.add_theme_font_size_override("font_size", 32)
@@ -238,10 +282,12 @@ func build_ui() -> void:
 	content.add_theme_constant_override("separation", 10)
 	scroll.add_child(content)
 
-func panel(title: String, text: String = "") -> void:
+func panel(title: String, text: String = "", animate_return: bool = false) -> void:
+	if presence != null: presence.close_view(animate_return)
 	if full != null:
 		full.holding = false
 		full.looking = false
+	modal.set_anchors_preset(Control.PRESET_CENTER)
 	modal.offset_left = -410
 	modal.offset_right = 410
 	modal.offset_top = -325
@@ -263,6 +309,23 @@ func panel(title: String, text: String = "") -> void:
 	content.add_child(heading)
 	if not text.is_empty():
 		paragraph(text)
+
+func compact_panel(title: String, text: String = "", phone_layout: bool = false) -> void:
+	panel(title, text, true)
+	shade.hide()
+	if phone_layout:
+		modal.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		modal.offset_left = -424
+		modal.offset_right = -24
+		modal.offset_top = 72
+		modal.offset_bottom = 730
+	else:
+		modal.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+		modal.offset_left = 24
+		modal.offset_right = 468
+		modal.offset_top = -272
+		modal.offset_bottom = -24
+	if content.get_child_count() > 0: content.get_child(0).add_theme_font_size_override("font_size", 20)
 
 func retire_snapshot(snapshot: Node) -> void:
 	# Let pending viewport render work finish before releasing its mesh materials.
@@ -290,6 +353,17 @@ func button(text: String, callback: Callable) -> void:
 	item.text = text
 	item.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	item.custom_minimum_size.y = 42
+	item.focus_mode = Control.FOCUS_NONE
+	if game.suspense and modal.anchor_left != 0.5:
+		item.custom_minimum_size.y = 32
+		item.add_theme_font_size_override("font_size", 15)
+		for state in ["normal", "hover", "pressed"]:
+			var compact_style := style(Color("213338") if state == "normal" else Color("34514f"), Color("47615f"), 4)
+			compact_style.content_margin_top = 4
+			compact_style.content_margin_bottom = 4
+			compact_style.content_margin_left = 10
+			compact_style.content_margin_right = 10
+			item.add_theme_stylebox_override(state, compact_style)
 	item.pressed.connect(callback)
 	content.add_child(item)
 
@@ -301,6 +375,7 @@ func close_panel() -> void:
 		full.holding = false
 	modal.hide()
 	shade.hide()
+	if presence != null: presence.close_view()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func show_intro() -> void:
@@ -325,7 +400,9 @@ func _input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 			demo.pause()
 		return
+	if full != null and full.active and presence.input(event): return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		presence.look_impulse(event.relative)
 		player.rotate_y(-event.relative.x * mouse_sensitivity)
 		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * mouse_sensitivity, -1.35, 1.35)
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -345,7 +422,7 @@ func _input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
-	if not modal.visible and not activity_transition and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	if not modal.visible and not activity_transition and not presence.blocked() and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var direction := Vector3.ZERO
 		if Input.is_physical_key_pressed(KEY_W): direction.z -= 1
 		if Input.is_physical_key_pressed(KEY_S): direction.z += 1
@@ -364,12 +441,11 @@ func _physics_process(delta: float) -> void:
 		if step_distance > 0.85 and player.is_on_floor():
 			step_distance = 0
 			if full != null and full.active: full.audio.footstep()
-		camera.position.y = lerpf(camera.position.y, 1.6 + (sin(walk_phase) * 0.012 if camera_motion and travel > 0.001 else 0.0), minf(1, delta * 12))
 		focused = find_focused()
 		prompt.text = "E  ·  " + focused if not focused.is_empty() else ""
 	else:
 		player.velocity = Vector3.ZERO
-		camera.position.y = lerpf(camera.position.y, 1.6, minf(1, delta * 12))
+		if not presence.blocked(): camera.position.y = lerpf(camera.position.y, 1.6, minf(1, delta * 12))
 	for label_name in station_labels:
 		station_labels[label_name].visible = not modal.visible and focused == label_name
 	update_hud()
@@ -399,8 +475,14 @@ func _process(delta: float) -> void:
 		night.update(delta)
 	if full != null and full.active:
 		full.update(delta)
+	if presence != null: presence.update(delta)
 
 func update_hud() -> void:
+	var immersive: bool = full != null and full.active
+	hud.get_parent().visible = not immersive
+	notice.visible = not immersive
+	reticle.visible = not modal.visible and not presence.blocked()
+	prompt.visible = not modal.visible and not presence.blocked()
 	hud.text = "OPEN UP · 문열어   /   %s     공복 %d   정신력 %d   ₩%s   식량 %d" % [game.stamp(), int(game.hunger), int(game.sanity), str(game.money), game.food]
 	if modal.visible:
 		hud.text += "\n%s %.1f시간 · 신고 %d/%d" % ["아침까지" if game.first_night else "검거까지", maxf(0, game.deadline - game.clock), game.reported.size(), 3 if game.suspense else 2]
@@ -455,7 +537,10 @@ func interact(target: String) -> void:
 		"현관": door_menu()
 
 func activity_menu(kind: String) -> void:
-	panel(kind, "업무는 시간당 약 3,000~4,200원. 연속할수록 수입이 오른다.\n수면은 시간당 정신력 약 5 회복. 이전 취침 시각과 4시간 넘게 차이나면 회복이 낮아진다.\n초인종이 울리면 행동이 멈추며 남은 시간을 계속할 수 있다.")
+	if game.suspense:
+		compact_panel(kind, "한 번에 얼마나 할까?\n초인종이 울리면 멈추고, 남은 시간은 휴대폰에서 재개한다.")
+	else:
+		panel(kind, "업무는 시간당 약 3,000~4,200원. 연속할수록 수입이 오른다.\n수면은 시간당 정신력 약 5 회복. 이전 취침 시각과 4시간 넘게 차이나면 회복이 낮아진다.\n초인종이 울리면 행동이 멈추며 남은 시간을 계속할 수 있다.")
 	for hours in ([1, 2, 4] if kind == "업무" else [2, 4, 8]):
 		button("%d시간 %s" % [hours, kind], func(): start_action(kind, hours))
 	button("돌아가기", close_panel)
@@ -467,26 +552,15 @@ func start_action(kind: String, hours: float) -> void:
 	if full != null and full.active and kind in ["업무", "수면", "식사"] and DisplayServer.get_name() != "headless":
 		activity_transition = true
 		close_panel()
-		var resting_height := 1.6
-		if kind == "업무":
-			player.position = Vector3(-3.4, 0.05, -2.8)
-			player.rotation.y = 0
-			camera.rotation.x = -0.12
-			resting_height = 1.2
-		elif kind == "수면":
-			player.position = Vector3(-2.55, 0.05, 2.3)
-			shade.show()
-		prompt.text = ("키보드 소리만 방 안을 채운다." if kind == "업무" else ("눈을 감는다. 문밖의 소리가 더 가까워진다." if kind == "수면" else "포장을 뜯는다.")) + "\nSpace / Esc 건너뛰기"
+		presence.activity(kind)
+		presence.say(("키보드 소리만 방 안을 채운다." if kind == "업무" else ("눈을 감는다." if kind == "수면" else "포장을 뜯는다.")) + "  Space 건너뛰기")
 		full.audio.cue("typing" if kind == "업무" else "rustle")
 		var elapsed := 0.0
 		while activity_transition and elapsed < 1.6:
 			await get_tree().process_frame
 			elapsed += get_process_delta_time()
-			camera.position.y = resting_height
 		activity_transition = false
-		camera.position.y = 1.6
-		prompt.text = ""
-		shade.hide()
+		presence.finish_activity()
 	game.begin(kind, hours)
 	after_action()
 
@@ -494,6 +568,11 @@ func after_action() -> void:
 	update_hud()
 	if game.ended:
 		ending()
+	elif game.suspense:
+		modal.hide()
+		shade.hide()
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		presence.say("초인종. 하던 일을 멈췄다. 현관을 확인하자. 남은 행동은 휴대폰에서 재개할 수 있다." if game.pending > 0 else (game.journal[0] if not game.journal.is_empty() else "시간이 흘렀다."), 5)
 	elif game.pending > 0:
 		panel("딩동.   /   %s" % game.stamp(), "문밖에 누군가 있다. %s %.1f시간이 남았다.\n문을 열기 전에 주문 내역과 방문자의 말을 비교하자." % [game.activity, game.pending])
 		if game.suspense:
@@ -529,7 +608,7 @@ func observe(source: String) -> void:
 
 func dialogue() -> void:
 	if game.suspense:
-		message("문 너머의 목소리", game.same_order_dialogue(), func(): observe("인터폰"))
+		full.dialogue()
 		return
 	var reply := "대답이 없다."
 	if game.visitor == "courier":
@@ -539,6 +618,9 @@ func dialogue() -> void:
 	message("문 너머의 목소리", reply, func(): observe("인터폰"))
 
 func door_menu() -> void:
+	if game.suspense:
+		full.observe("현관 렌즈")
+		return
 	var protection := "호신 스프레이를 갖고 있다." if game.defense else "사용할 수 있는 호신용품이 없다."
 	if game.suspense:
 		var owned: Array[String] = []
@@ -606,7 +688,7 @@ func phone() -> void:
 
 func food_menu() -> void:
 	if game.suspense:
-		panel("식료품 / 식사", "간편식 %d개 · 좋아하는 음식 %d개\n간편식: 공복 42 감소 / 정신력 3 회복\n좋아하는 음식: 공복 48 감소 / 정신력 20 회복\n식사 시간 30분. 좋아하는 음식도 문 앞에서 회수해야 한다." % [game.food, game.good_food])
+		compact_panel("식료품 / 식사", "간편식 %d개 · 좋아하는 음식 %d개\n식사는 30분. 좋아하는 음식은 정신력을 더 회복한다." % [game.food, game.good_food])
 		button("간편식 먹기", func(): full_eat(false))
 		button("좋아하는 음식 먹기", func(): full_eat(true))
 		button("돌아가기", close_panel)
@@ -623,7 +705,9 @@ func food_menu() -> void:
 	button("돌아가기", close_panel)
 
 func journal() -> void:
-	panel("생활·관찰 기록", "확보: " + (", ".join(game.evidence) if not game.evidence.is_empty() else "없음"))
+	var info := "확보: " + (", ".join(game.evidence) if not game.evidence.is_empty() else "없음")
+	if game.suspense: compact_panel("생활·관찰 기록", info, true)
+	else: panel("생활·관찰 기록", info)
 	for entry in game.journal:
 		paragraph(entry)
 	button("돌아가기", close_panel)
@@ -640,7 +724,8 @@ func full_phone() -> void:
 		info = "%s / 번호 %s / %d일차 %02d:%02d 예정" % [game.product_name, game.order_number, int(game.order_due / 24) + 1, int(fmod(game.order_due, 24)), int(fmod(game.order_due * 60, 60))]
 	elif game.parcel:
 		info = "%s / 번호 %s / 미회수 · 남은 회수 시간 %.1f시간" % [game.product_name, game.order_number, maxf(0, 3 - game.clock + game.parcel_since)]
-	panel("휴대폰 / 생활과 조사", "잔액 %d원 · 간편식 %d개 · 좋아하는 음식 %d개\n%s\n검거 예상 %d일차 %02d시 / 확보 증거 %d개 · 신고 %d개\n일반 물품은 주로 낮 배송, 음식은 약 45분 후 도착한다. 모든 물품은 현관 회수가 필요하다." % [game.money, game.food, game.good_food, info, int(game.deadline / 24) + 1, int(fmod(game.deadline, 24)), game.evidence.size(), game.reported.size()])
+	compact_panel("휴대폰 · Esc 닫기", "%s · 잔액 %d원\n공복 %d · 정신력 %d\n간편식 %d개 · 좋아하는 음식 %d개\n%s\n확보 증거 %d개 · 신고 %d개\n일반 물품은 낮 배송, 음식은 약 45분 후 도착." % [game.stamp(), game.money, int(game.hunger), int(game.sanity), game.food, game.good_food, info, game.evidence.size(), game.reported.size()], true)
+	presence.set_gesture("phone")
 	for key in State.CATALOG.keys():
 		button("%s 주문 · %d원" % [State.CATALOG[key].name, game.price(key)], func():
 			var reply: String = game.purchase(key)
@@ -694,7 +779,8 @@ func show_settings() -> void:
 	button("돌아가기", show_pause)
 
 func message(title: String, text: String, back: Callable) -> void:
-	panel(title, text)
+	if game.suspense: compact_panel(title, text, true)
+	else: panel(title, text)
 	button("확인", back)
 
 func ending() -> void:
@@ -976,4 +1062,109 @@ func capture_upgrade() -> void:
 	await capture_upgrade_frame("upgrade_listen")
 	full.stop()
 	print("UPGRADE_CAPTURE_OK")
+	get_tree().quit()
+
+func test_presence() -> void:
+	full.start_first_night()
+	close_panel()
+	player.position = Vector3(1.5, 0.05, -2.9)
+	game.begin("업무", 1)
+	var original_time: float = game.clock
+	full.observe("인터폰")
+	assert(not modal.visible and not shade.visible and presence.blocked())
+	await get_tree().create_timer(0.65).timeout
+	assert(camera.global_position.distance_to(intercom_surface.global_position) < 0.8)
+	var screen_area: float = get_viewport().get_visible_rect().get_area()
+	assert(presence.choices.get_rect().get_area() < screen_area * 0.1)
+	assert(game.clock == original_time)
+	if DisplayServer.get_name() != "headless": assert(intercom_surface.material_override is ShaderMaterial)
+	full.dialogue()
+	assert(presence.actions.size() == 4 and not modal.visible)
+	var key := InputEventKey.new()
+	key.keycode = KEY_2
+	key.pressed = true
+	presence.input(key)
+	assert(game.visitor.is_empty() and game.parcel)
+	key.keycode = KEY_E
+	presence.input(key)
+	full.update(0.4)
+	assert(absf(door_lock.rotation.z) > 0.2 and game.parcel)
+	await get_tree().create_timer(0.45).timeout
+	assert(presence.hands[1].global_position.distance_to(door_handle.global_position) < 0.22)
+	key.pressed = false
+	presence.input(key)
+	assert(door_lock.rotation.z == 0 and door_handle.rotation.z == 0 and game.parcel)
+	full.open()
+	assert(game.good_food == 1 and not game.parcel and presence.view == "opening")
+	await get_tree().create_timer(0.8).timeout
+	assert(absf(entrance_hinge.rotation.y) > 0.3 and presence.blocked())
+	await get_tree().create_timer(1.4).timeout
+	assert(absf(entrance_hinge.rotation.y) < 0.01 and not presence.blocked())
+	assert(game.clock == original_time)
+	full_phone()
+	await get_tree().process_frame
+	assert(not shade.visible and modal.get_global_rect().position.x > get_viewport().get_visible_rect().size.x * 0.6)
+	close_panel()
+	presence.activity("업무")
+	await get_tree().create_timer(0.65).timeout
+	assert(camera.position.y < 1.23 and presence.gesture == "work")
+	presence.finish_activity()
+	await get_tree().create_timer(0.45).timeout
+	assert(not presence.blocked())
+	game.visitor = "stalker"
+	game.visit_started = game.clock - 0.5
+	full.observe("현관 렌즈")
+	full.open()
+	assert(game.ended and presence.view == "death")
+	await get_tree().create_timer(0.9).timeout
+	assert(is_instance_valid(presence.attacker) and presence.attacker.position.z > -5.45)
+	await get_tree().create_timer(1.1).timeout
+	assert(modal.visible)
+	full.stop()
+	print("PRESENCE_TESTS_OK: compact choices, physical screen, frozen clock, keyboard dialogue, reversible lock, live doorway, phone layout, body gestures, encounter animation")
+	get_tree().quit()
+
+func capture_presence_frame(file_name: String, seconds: float = 0.7) -> void:
+	await get_tree().create_timer(seconds).timeout
+	for i in range(3): await get_tree().process_frame
+	get_viewport().get_texture().get_image().save_png("res://docs/" + file_name + ".png")
+
+func capture_presence() -> void:
+	full.start_first_night()
+	close_panel()
+	player.position = Vector3(0, 0.05, -1.5)
+	await capture_presence_frame("presence_room")
+	game.begin("업무", 1)
+	full.observe("인터폰")
+	await capture_presence_frame("presence_intercom")
+	full.dialogue()
+	await capture_presence_frame("presence_dialogue", 0.15)
+	full.ask_topic("두고 가기")
+	full.opening_button.button_down.emit()
+	await capture_presence_frame("presence_unlock", 0.6)
+	full.opening_button.button_up.emit()
+	full.open()
+	await capture_presence_frame("presence_open", 0.78)
+	await get_tree().create_timer(1.4).timeout
+	while game.clock < 21.5: game.begin("대기", minf(0.25, 21.5 - game.clock))
+	game.ask("두고 가기")
+	full.observe("현관 렌즈")
+	await capture_presence_frame("presence_lens")
+	full.listen()
+	await capture_presence_frame("presence_listen")
+	full_phone()
+	await capture_presence_frame("presence_phone")
+	close_panel()
+	player.position = Vector3(-3.4, 0.05, -2.8)
+	player.rotation = Vector3.ZERO
+	camera.rotation = Vector3.ZERO
+	presence.activity("업무")
+	await capture_presence_frame("presence_work")
+	presence.finish_activity()
+	await get_tree().create_timer(0.45).timeout
+	full.observe("현관 렌즈")
+	full.open()
+	await capture_presence_frame("presence_encounter", 0.95)
+	full.stop()
+	print("PRESENCE_CAPTURE_OK")
 	get_tree().quit()
