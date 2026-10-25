@@ -45,6 +45,7 @@ func survival_steps() -> Array[Dictionary]:
 	]
 
 func start(kind: String) -> void:
+	if host.full != null: host.full.stop()
 	generation += 1
 	automatic = false
 	timer.stop()

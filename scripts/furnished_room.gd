@@ -23,6 +23,17 @@ static func asset(host: Node3D, name: String, pos: Vector3, height: float, angle
 	host.add_child(holder)
 	var model := scene.instantiate() as Node3D
 	holder.add_child(model)
+	# Keep original material separation while bringing furniture into the room palette.
+	for mesh in model.find_children("*", "MeshInstance3D", true, false):
+		for surface in range(mesh.mesh.get_surface_count()):
+			var original = mesh.mesh.surface_get_material(surface)
+			if original is StandardMaterial3D:
+				var muted: StandardMaterial3D = original.duplicate()
+				var level := muted.albedo_color.v
+				var pale := Color("b8b0a0") if name in ["books", "cardboardBoxClosed", "rugDoormat"] else Color("82999a")
+				muted.albedo_color = pale if level > 0.72 else (Color("66716d") if level > 0.38 else Color("252e35"))
+				muted.roughness = 0.94
+				mesh.set_surface_override_material(surface, muted)
 	var bounds := mesh_bounds(model)
 	var factor := height / maxf(bounds.size.y, 0.001)
 	model.scale *= factor
