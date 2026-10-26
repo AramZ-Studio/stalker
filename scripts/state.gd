@@ -54,6 +54,14 @@ var weekly_survival := false
 var meal_day := 0
 var meals_today := 0
 var meal_history: Dictionary = {}
+var campaign := false
+var delivery_persona := 0
+var threat_profile := "wrong_item"
+var missed_deliveries := 0
+var neighbor_tip := false
+var ending_tag := ""
+const CHAPTERS := ["생활의 시작", "낯선 이웃", "첫 사칭", "문 옆의 사각지대", "늦은 배송", "익숙해진 목소리", "마지막 밤"]
+const CHAPTER_HINTS := ["남은 식량을 확인하고 다음 배송을 준비하자.", "주문하지 않은 방문도 있다. 대답과 두고 간 물건을 확인하자.", "번호만 믿지 말고 물품과 상대의 행동을 비교하자.", "빈 카메라 화면이 퇴장을 뜻하지는 않는다.", "일반 배송이 두 시간 늦어진다. 재고와 음식 배송 시간을 확인하자.", "익숙한 대답을 흉내 내기도 한다. 다른 시야와 소리를 확인하자.", "마지막 날의 식사를 먼저 챙기자. 떠난 뒤 다시 올 수도 있다."]
 const CATALOG := {
 	"pantry": {"name": "생수·간편식 3개", "price": 12000},
 	"meal": {"name": "좋아하는 따뜻한 음식", "price": 15000},
@@ -66,6 +74,7 @@ const CATALOG := {
 func enable_full_game(seed_value: int = -1, weekly: bool = true) -> void:
 	suspense = true
 	weekly_survival = weekly
+	campaign = weekly
 	if seed_value < 0: rng.randomize()
 	else: rng.seed = seed_value
 	clock = 0.0 if weekly else START
@@ -75,15 +84,32 @@ func enable_full_game(seed_value: int = -1, weekly: bool = true) -> void:
 	meals_today = 0
 	meal_history.clear()
 	food = 1
+	if weekly: money = 24000
 	hunger = 32.0
 	for day in range(8):
 		threat_times[day] = day * 24.0 + rng.randi_range(84, 93) * 0.25
+	if campaign:
+		threat_times[0] = 9999.0
+		threat_times[1] = 9999.0
+		threat_times[3] = 72.0 + rng.randi_range(81, 88) * 0.25
+		threat_times[4] = 96.0 + rng.randi_range(74, 80) * 0.25
+		threat_times[6] = 144.0 + rng.randi_range(76, 82) * 0.25
 	log_entry("7일차 자정까지 살아남아야 한다. 매일 최소 한 끼를 먹자. 제보하면 순찰이 강화된다." if weekly else "경찰: ‘수색 중입니다. 4일차 06시까지 버텨주세요. 제보가 있으면 더 빨라집니다.’")
 	log_entry("남은 간편식 1개. 일해서 생활비를 벌고, 필요한 물품을 주문해야 한다.")
+	if campaign: log_entry(chapter_title() + " · " + chapter_hint())
+
+func chapter_title() -> String:
+	return "%d일차 · %s" % [mini(6, int(clock / 24)) + 1, CHAPTERS[mini(6, int(clock / 24))]]
+
+func chapter_hint() -> String:
+	return CHAPTER_HINTS[mini(6, int(clock / 24))]
+
+func product_label(key: String) -> String:
+	return "생수·간편식 2끼" if weekly_survival and key == "pantry" else str(CATALOG[key].name)
 
 func price(key: String) -> int:
 	if not CATALOG.has(key): return 0
-	return int(CATALOG[key].price) + (used_defenses.size() * 7000 if key in ["spray", "alarm", "light"] else 0)
+	return (10000 if weekly_survival and key == "pantry" else int(CATALOG[key].price)) + (used_defenses.size() * 7000 if key in ["spray", "alarm", "light"] else 0)
 
 func purchase(key: String) -> String:
 	if not CATALOG.has(key): return "판매하지 않는 물품이다."
@@ -93,7 +119,7 @@ func purchase(key: String) -> String:
 	if money < price(key): return "돈이 부족하다. PC에서 업무를 하면 수입을 얻을 수 있다."
 	money -= price(key)
 	product = key
-	product_name = str(CATALOG[key].name)
+	product_name = product_label(key)
 	order_number = "%04d" % rng.randi_range(1000, 9999)
 	if key == "meal":
 		order_due = clock + 0.75
@@ -102,11 +128,15 @@ func purchase(key: String) -> String:
 		if h < 9: order_due = floorf(clock / 24.0) * 24.0 + 11.0
 		elif h <= 16: order_due = clock + 1.0
 		else: order_due = floorf(clock / 24.0 + 1.0) * 24.0 + 11.0
+	if campaign and int(clock / 24) == 4 and key != "meal":
+		order_due += 2
+		log_entry("일반 배송 지연 안내: 오늘 주문은 평소보다 두 시간 늦어진다.")
 	log_entry("%s 주문 · 번호 %s · 도착 예정 %d일차 %02d:%02d" % [product_name, order_number, int(order_due / 24) + 1, int(fmod(order_due, 24)), int(fmod(order_due * 60, 60))])
 	return "주문했다. 물품은 직접 현관에서 회수해야 한다."
 
 func camera_person() -> bool:
-	return not visitor.is_empty() and (not suspense or visitor != "stalker" or (clock - visit_started < 0.25 and not asked_to_leave))
+	var visible_for := 0.05 if threat_profile == "blind" else 0.25
+	return not visitor.is_empty() and (not suspense or visitor != "stalker" or (clock - visit_started < visible_for and not asked_to_leave))
 
 func lens_person() -> bool:
 	return not visitor.is_empty()
@@ -115,8 +145,12 @@ func same_order_dialogue() -> String:
 	if visitor.is_empty(): return "대답이 없다. 누군가 문 옆에 남아 있는지 소리도 확인해야 한다."
 	if visitor == "neighbor": return "‘옆집이에요. 저희 집에 잘못 온 우편물 두고 갈게요. 열지 않으셔도 돼요.’"
 	if visitor == "courier":
+		if delivery_persona == 1: return "‘번호가 빗물에 번졌네요. %s입니다. 앱에서 확인하시고 가져가세요.’" % product_name
+		if delivery_persona == 2: return "‘잠시만요, 통화 중이라… 물건 여기 놓겠습니다.’ 단말기에서 짧은 알림이 난다."
 		return "‘%s, %s 맞으시죠? 문 앞에 두고 갈게요.’\n목소리는 무뚝뚝하지만 주문 내용과 일치한다." % [order_number, product_name]
 	if not used_defenses.is_empty(): return "‘지난번에 쓴 건 이제 안 통해요. 이번에는 열어봐요.’\n상대는 주문과 관계없는 말을 하고 있다."
+	if threat_profile == "mimic": return "‘%s, %s 맞으시죠? 문 앞에 두고 갈게요.’ 어제 배달원의 말과 거의 같다." % [order_number, product_name]
+	if threat_profile == "silent": return "응답 대신 짧은 노크 두 번. 문 가까이에서 옷이 스친다."
 	return "‘%s 맞죠? 문 앞에 두었습니다. 문 여는 소리 듣고 갈게요.’\n물품명을 물으니 ‘냉동식품’이라고 답한다. 이번 주문과 맞는지 확인해야 한다." % (order_number if not order_number.is_empty() else "0417")
 
 func ask(topic: String) -> String:
@@ -137,7 +171,10 @@ func ask(topic: String) -> String:
 		if visitor == "neighbor": return "‘배달 아니에요. 옆집 우편물이요. 봉투에 호수 보이시죠?’"
 		if visitor == "courier": return "‘단말기가 늦네요. %s, %s입니다. 확인하시고 가져가세요.’" % [order_number, product_name]
 		return "‘앱이 늦는 거예요. 열면 확인할 수 있잖아요.’ 물건 이름은 말하지 않는다."
-	if visitor == "neighbor": return "‘옆집이에요. 엘리베이터에서 뵀었죠. 문은 안 여셔도 돼요.’"
+	if visitor == "neighbor":
+		if not neighbor_tip: log_entry("이웃의 정보: 카메라 바로 옆은 보이지 않는다. 렌즈와 문에 닿는 소리도 확인하자.")
+		neighbor_tip = true
+		return "‘옆집이에요. 요즘 문 옆 구석에 서 있는 사람이 있어요. 카메라만 보지 마세요. 봉투는 여기 둘게요.’"
 	if visitor == "courier": return "‘오늘 이 층은 처음인데요. 바빠서 물건 놓고 가겠습니다.’"
 	return "‘늘 이 시간까지 일하시네요.’ 잠깐 뒤, ‘아니, 불이 켜져 있어서요.’"
 
@@ -171,6 +208,15 @@ func meal_status() -> String:
 	if won: return "7일 모두 식사 완료"
 	return "오늘 식사 %d회 / 최소 1회 · %s" % [meals_today, "완료" if meals_today > 0 else "자정 전 식사 필요"]
 
+func take_walk() -> String:
+	if night() and sanity < 35: return "너무 두렵다. 지금은 밤에 나갈 수 없다."
+	if visitor == "stalker": return open_door()
+	sanity = minf(100, sanity + (5 if night() else 18))
+	last_walk = clock
+	log_entry("동네를 산책했다. " + ("어둠 속에서는 마음이 놓이지 않았다." if night() else "햇빛과 바깥 공기에 진정됐다."))
+	begin("산책", 1)
+	return "산책을 마쳤다."
+
 func stamp() -> String:
 	if weekly_survival and clock >= WEEK_END: return "7일차 24:00"
 	return "%d일차 %02d:%02d" % [int(clock / 24.0) + 1, int(fmod(clock, 24.0)), int(fmod(clock * 60.0, 60.0))]
@@ -186,6 +232,10 @@ func finish(success: bool, reason: String) -> void:
 	ended = true
 	won = success
 	ending = reason
+	if success and weekly_survival:
+		ending_tag = "prepared" if reported.size() >= 3 and used_defenses.is_empty() else ("scarred" if not used_defenses.is_empty() else "survived")
+		ending += "\n" + ({"prepared": "확보한 증거가 수사를 도왔다. 준비와 관찰로 문을 지켰다.", "scarred": "호신용품으로 겨우 살아남은 밤의 흔적이 남았다.", "survived": "일주일은 끝났다. 아직 기록하지 못한 단서들이 남아 있다."}[ending_tag])
+		ending += "\n제보 %d개 · 방어 %d회 · 놓친 배송 %d건" % [reported.size(), used_defenses.size(), missed_deliveries]
 	log_entry(reason)
 
 func order() -> void:
@@ -258,6 +308,7 @@ func advance(hours: float, kind: String = "대기") -> void:
 				meal_day = int(clock / 24)
 				meals_today = 0
 				log_entry("새로운 날. 오늘도 최소 한 끼를 먹어야 한다.")
+				if campaign: log_entry(chapter_title() + " · " + chapter_hint())
 		if weekly_survival and meals_today == 0 and fmod(clock, 24) >= 20:
 			var warning := "meal_warning_%d" % meal_day
 			if not events.has(warning):
@@ -265,6 +316,7 @@ func advance(hours: float, kind: String = "대기") -> void:
 				log_entry("아직 오늘 식사를 하지 않았다. 자정 전에 한 끼를 먹어야 한다.")
 		if parcel and clock - parcel_since >= 3.0:
 			parcel = false
+			missed_deliveries += 1
 			log_entry("문 앞에 3시간 동안 둔 물품이 사라졌다.")
 		var bell := update_events()
 		if sanity <= 0.0 or hunger >= 100.0:
@@ -316,6 +368,7 @@ func update_full_events() -> bool:
 		asked_to_leave = false
 		visit_style = mini(day, 2)
 		visit_started = clock
+		if campaign: threat_profile = "mimic" if day >= 5 else ("blind" if day == 3 else "wrong_item")
 		visit_until = clock + (maxf(0.25, 1.0 - reported.size() * 0.25) if weekly_survival else 1.0)
 		if camera_ready: recorded_visit = true
 		log_entry(["초인종. ‘문 앞입니다’라는 메시지. 젖은 상자가 카메라 아래 보인다.", "초인종. ‘오늘은 늦게 주무시네요.’ 잠깐 뒤 배달이라는 말이 이어진다.", "초인종이 울리기 전, 현관 손잡이에서 금속이 스쳤다. ‘문 앞입니다.’"][mini(day, 2)])
@@ -331,16 +384,27 @@ func update_full_events() -> bool:
 		visitor = ""
 		sound_events.append("steps_away")
 		log_entry("이번에는 발소리가 계단 아래로 멀어진다.")
+	if campaign and day == 6 and events.has(key) and visitor.is_empty() and clock >= last_departure + 1 and fmod(clock, 24) < 23.5 and not events.has(key + "_return"):
+		events.append(key + "_return")
+		visitor = "stalker"
+		asked_to_leave = false
+		threat_profile = "silent"
+		visit_started = clock
+		visit_until = clock + maxf(0.25, 1.0 - reported.size() * 0.25)
+		sound_events.append("knock")
+		log_entry("떠난 줄 알았던 문밖에서 다시 노크가 난다. 이번에는 아무 말도 없다.")
+		bell = true
 	if order_due >= 0 and clock >= order_due and visitor != "stalker":
 		visitor = "courier"
 		asked_to_leave = false
 		visit_style = rng.randi_range(0, 2)
+		delivery_persona = rng.randi_range(0, 2) if campaign and day > 0 else 0
 		visit_started = clock
 		visit_until = clock + 0.5
 		parcel = true
 		parcel_since = clock
 		order_due = -1
-		log_entry("초인종. ‘문 앞에 두겠습니다.’ 주문의 도착 예정 시각과 가까운 시간이다.")
+		log_entry("초인종. ‘문 앞에 두겠습니다.’ 도착 후 3시간 안에 회수하지 않으면 분실할 수 있다. 환불되지 않는다.")
 		sound_events.append("bell")
 		bell = true
 	var neighbor_key := "neighbor_%d" % day
@@ -450,7 +514,7 @@ func open_full_door() -> String:
 		return ending
 	if parcel:
 		match product:
-			"pantry": food += 3
+			"pantry": food += 2 if weekly_survival else 3
 			"meal": good_food += 1
 			"camera": camera_ready = true
 			_: defenses.append(product); defense = true
@@ -461,8 +525,12 @@ func open_full_door() -> String:
 	if visitor == "neighbor":
 		visitor = ""
 		mail_waiting = false
-		return "이웃이 두고 간 우편물을 받았다. 주문한 물품은 아니었다."
+		neighbor_tip = true
+		log_entry("이웃의 쪽지: 문 옆 구석에 누가 서 있었다. 카메라만 보지 말고 소리도 확인해달라는 부탁이다.")
+		return "우편물과 이웃의 쪽지를 받았다. ‘문 옆에 서 있는 사람이 있어요. 카메라만 보지 마세요.’"
 	if mail_waiting:
 		mail_waiting = false
-		return "잘못 배송되었던 우편물을 회수했다. 봉투에 내 호수가 적혀 있다."
+		neighbor_tip = true
+		log_entry("이웃의 쪽지: 카메라 바로 옆에서 인기척이 났다. 렌즈와 소리도 확인하자.")
+		return "내 호수가 적힌 우편물을 회수했다. 이웃의 쪽지에 카메라 옆 사각지대를 주의하라고 적혀 있다."
 	return "문 앞은 비어 있다. 다시 잠갔다."

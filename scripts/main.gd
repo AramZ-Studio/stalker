@@ -7,6 +7,8 @@ const DoorNight = preload("res://scripts/door_night.gd")
 const FullGame = preload("res://scripts/full_game.gd")
 const Presence = preload("res://scripts/presence.gd")
 const FootAudio = preload("res://scripts/night_audio.gd")
+const ScenarioLab = preload("res://scripts/scenario_lab.gd")
+var lab: RefCounted
 var presence: Node
 var full: RefCounted
 var night: RefCounted
@@ -50,6 +52,7 @@ func _ready() -> void:
 	demo = Demo.new(self)
 	night = DoorNight.new(self)
 	full = FullGame.new(self)
+	lab = ScenarioLab.new(self)
 	game.log_entry("경찰: ‘용의자를 추적 중입니다. 3일차 06시까지 문단속하세요. 특징이나 차량을 보면 제보해주세요.’")
 	game.log_entry("배송은 주문 1시간 후 도착하며, 3시간 내 회수해야 한다. 식량 2개와 42,000원이 있다.")
 	show_intro()
@@ -79,6 +82,10 @@ func _ready() -> void:
 		call_deferred("test_movement")
 	elif "--capture-week" in OS.get_cmdline_user_args():
 		call_deferred("capture_week")
+	elif "--test-lab" in OS.get_cmdline_user_args():
+		call_deferred("test_lab")
+	elif "--capture-lab" in OS.get_cmdline_user_args():
+		call_deferred("capture_lab")
 
 func material(color: Color, glow: bool = false) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -385,17 +392,33 @@ func close_panel() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func show_intro() -> void:
+	if lab != null: lab.stop()
+	if full != null and full.active: full.stop()
+	if night != null and night.active: night.stop()
+	if demo != null: demo.active = false; demo.automatic = false
+	game = State.new()
+	player.position = Vector3(0, 0.05, 1)
+	player.rotation = Vector3.ZERO
+	camera.position = Vector3(0, 1.6, 0)
+	camera.rotation = Vector3.ZERO
 	panel("OPEN UP · 문열어 / 일주일 생존", "혼자 사는 재택 개발자. 밤마다 누군가 찾아오지만 생활은 계속해야 한다.\n\n1일차 00시부터 7일차 자정까지 살아남기.\n매일 최소 한 끼를 먹고, 일하고 자며 생활을 유지하자.\n주문·대화·소리·정지 화면을 비교해 문을 열지 판단하라.\n증거를 제보하면 순찰이 강화된다.\n\nWASD 걷기 · Shift 달리기 · Ctrl 천천히 걷기\nE 확인 · Tab 휴대폰 · J 기록 · Esc 메뉴\n시간은 생활 행동과 기다리기를 선택할 때만 흐른다.")
-	button("일주일 생존 · 매일 한 끼", func(): full.start())
-	button("기존 첫날 밤 테스트", func(): full.start_first_night())
-	button("현관 연출만 짧게 체험", func(): night.start())
-	button("생활 시스템 시연 · 기존 버전", close_panel)
-	button("사망 시연 · 주문하지 않은 방문", func(): demo.start("death"))
-	button("생존 시연 · 관찰과 신고", func(): demo.start("survival"))
+	button("게임 시작 · 일주일 생존", start_demo)
+	button("상황 체험실", lab.show_list)
+	button("설정", show_settings)
 	button("종료", func(): get_tree().quit())
-	button("시선 · 화면 설정", show_settings)
+
+func start_demo() -> void:
+	lab.stop()
+	full.start()
+	player.position = Vector3(0, 0.05, 1)
+	player.rotation = Vector3.ZERO
+	camera.position = Vector3(0, 1.6, 0)
+	camera.rotation = Vector3.ZERO
+	camera.fov = preferred_fov
+	step_distance = 0
 
 func _input(event: InputEvent) -> void:
+	if lab != null and lab.input(event): return
 	if activity_transition:
 		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_SPACE, KEY_ENTER]: activity_transition = false
 		return
@@ -413,6 +436,9 @@ func _input(event: InputEvent) -> void:
 		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * mouse_sensitivity, -1.35, 1.35)
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
+			if not full.active:
+				show_intro()
+				return
 			if modal.visible and not game.ended:
 				close_panel()
 			elif not game.ended:
@@ -490,11 +516,12 @@ func _process(delta: float) -> void:
 	if full != null and full.active:
 		full.update(delta)
 	if presence != null: presence.update(delta)
+	if lab != null: lab.update()
 
 func update_hud() -> void:
 	var immersive: bool = full != null and full.active
-	hud.get_parent().visible = not immersive
-	notice.visible = not immersive
+	hud.get_parent().visible = not immersive and not modal.visible
+	notice.visible = not immersive and not modal.visible
 	reticle.visible = not modal.visible and not presence.blocked()
 	prompt.visible = not modal.visible and not presence.blocked()
 	hud.text = "OPEN UP · 문열어   /   %s     공복 %d   정신력 %d   ₩%s   식량 %d" % [game.stamp(), int(game.hunger), int(game.sanity), str(game.money), game.food]
@@ -657,6 +684,16 @@ func door_menu() -> void:
 	button("돌아가기", close_panel)
 
 func walk() -> void:
+	if game.suspense:
+		if game.visitor == "stalker" and not (game.night() and game.sanity < 35):
+			full.open()
+			return
+		var before: float = game.clock
+		var result: String = game.take_walk()
+		if game.ended: ending()
+		elif game.clock > before: after_action()
+		else: presence.say(result, 5)
+		return
 	if game.night() and game.sanity < 35:
 		message("산책", "너무 두렵다. 지금은 밤에 나갈 수 없다.", door_menu)
 		return
@@ -744,9 +781,10 @@ func full_phone() -> void:
 	compact_panel("휴대폰 · Esc 닫기", "%s · 잔액 %d원\n공복 %d · 정신력 %d\n간편식 %d개 · 좋아하는 음식 %d개\n%s\n확보 증거 %d개 · 신고 %d개\n일반 물품은 낮 배송, 음식은 약 45분 후 도착." % [game.stamp(), game.money, int(game.hunger), int(game.sanity), game.food, game.good_food, info, game.evidence.size(), game.reported.size()], true)
 	if game.weekly_survival:
 		paragraph("목표: 7일차 자정까지 생존\n" + game.meal_status())
+	if game.campaign: paragraph(game.chapter_title() + "\n" + game.chapter_hint())
 	presence.set_gesture("phone")
 	for key in State.CATALOG.keys():
-		button("%s 주문 · %d원" % [State.CATALOG[key].name, game.price(key)], func():
+		button("%s 주문 · %d원" % [game.product_label(key), game.price(key)], func():
 			var reply: String = game.purchase(key)
 			message("주문", reply, full_phone))
 	button("확보한 증거 경찰에 전달", func():
@@ -771,6 +809,11 @@ func show_pause() -> void:
 	if game.pending > 0:
 		button("남은 행동 계속", func(): game.resume_activity(); after_action())
 	button("처음부터 다시 시작", func(): get_tree().reload_current_scene())
+	if lab.active:
+		button("현재 상황 다시 체험", lab.start_case)
+		button("체험 조건 변경", lab.show_conditions)
+	button("상황 체험실로 · 현재 진행 종료", lab.show_list)
+	button("시작 메뉴로 · 현재 진행 종료", show_intro)
 	button("종료", func(): get_tree().quit())
 
 func show_settings() -> void:
@@ -795,7 +838,9 @@ func show_settings() -> void:
 	motion.button_pressed = camera_motion
 	motion.toggled.connect(func(value: bool): camera_motion = value)
 	content.add_child(motion)
-	button("돌아가기", show_pause)
+	button("돌아가기", func():
+		if full.active: show_pause()
+		else: show_intro())
 
 func message(title: String, text: String, back: Callable) -> void:
 	if game.suspense: compact_panel(title, text, true)
@@ -803,10 +848,12 @@ func message(title: String, text: String, back: Callable) -> void:
 	button("확인", back)
 
 func ending() -> void:
-	panel("생존 / 문밖은 조용하다" if game.won else "사망 / 문이 열렸다", "%s\n\n%s · 확보 증거 %d · 신고 %d\n이 MVP는 생활과 방문 판단, 제보의 흐름을 시험하는 짧은 시제품이다." % [game.ending, game.stamp(), game.evidence.size(), game.reported.size()])
-	button("처음부터 다시 시작", func(): get_tree().reload_current_scene())
-	button("사망 시연", func(): demo.start("death"))
-	button("생존 시연", func(): demo.start("survival"))
+	panel("생존 / 문밖은 조용하다" if game.won else "생존 실패", "%s\n\n%s · 확보 증거 %d · 신고 %d" % [game.ending, game.stamp(), game.evidence.size(), game.reported.size()])
+	if lab.active: lab.result_controls()
+	else:
+		button("일주일 생존 다시 시작", start_demo)
+		button("상황 체험실", lab.show_list)
+		button("시작 메뉴", show_intro)
 	button("종료", func(): get_tree().quit())
 
 func smoke_test() -> void:
@@ -1224,4 +1271,81 @@ func capture_week() -> void:
 		await get_tree().create_timer(0.4).timeout
 	full.stop()
 	print("WEEK_CAPTURE_AUDIO_OK")
+	get_tree().quit()
+
+func menu_buttons() -> Array[String]:
+	var result: Array[String] = []
+	for child in content.get_children():
+		if child is Button and not child is OptionButton: result.append(child.text)
+	return result
+
+func test_lab() -> void:
+	show_intro()
+	assert(menu_buttons().size() == 4 and menu_buttons().has("상황 체험실"))
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.keycode = KEY_ESCAPE
+	_input(key)
+	assert(modal.visible and not full.active)
+	lab.show_list()
+	assert(menu_buttons().size() == lab.Catalog.CASES.size() + 1)
+	lab.select_case("courier")
+	assert(lab.page == "conditions")
+	lab.input(key)
+	assert(lab.page == "list")
+	for item in lab.Catalog.CASES:
+		lab.select_case(item.id)
+		lab.start_case()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		assert(lab.active and not game.campaign and not game.ended)
+		assert(lab.toolbar.visible == not modal.visible)
+		print("LAB_UI_CASE_OK: " + str(item.id))
+	lab.select_case("courier")
+	lab.config["sanity"] = 40
+	lab.config["hour"] = 14
+	lab.start_case()
+	assert(game.sanity == 40 and game.clock == 14)
+	game.food = 99
+	lab.start_case()
+	assert(game.food == 1 and game.sanity == 40)
+	lab.select_case("daily_meal")
+	lab.start_case()
+	lab.trigger()
+	assert(game.ended and menu_buttons().has("다시 체험"))
+	lab.start_case()
+	assert(not game.ended)
+	lab.select_case("unarmed")
+	lab.start_case()
+	lab.trigger()
+	await get_tree().create_timer(2.1).timeout
+	assert(game.ended and modal.visible)
+	lab.show_conditions()
+	assert(lab.page == "conditions" and not full.active)
+	start_demo()
+	assert(game.campaign and game.weekly_survival and game.food == 1 and game.money == 24000 and not lab.active)
+	full.stop()
+	print("LAB_UI_OK: single demo menu, 38 scenario views, conditions, restart, actual outcome and demo isolation")
+	get_tree().quit()
+
+func capture_lab() -> void:
+	show_intro()
+	await capture_presence_frame("lab_main")
+	lab.category = "방문"
+	lab.show_list()
+	await capture_presence_frame("lab_list")
+	lab.select_case("spray")
+	await capture_presence_frame("lab_conditions")
+	lab.start_case()
+	await capture_presence_frame("lab_play")
+	lab.select_case("daily_meal")
+	lab.start_case()
+	lab.trigger()
+	await capture_presence_frame("lab_result")
+	start_demo()
+	close_panel()
+	full_phone()
+	await capture_presence_frame("lab_campaign")
+	full.stop()
+	print("LAB_CAPTURE_OK")
 	get_tree().quit()
