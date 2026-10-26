@@ -58,7 +58,8 @@ static func furnish(host: Node3D) -> void:
 	asset(host, "computerScreen", Vector3(-3.4, 0.78, -4.05), 0.55)
 	asset(host, "computerKeyboard", Vector3(-3.4, 0.79, -3.65), 0.045)
 	asset(host, "computerMouse", Vector3(-2.88, 0.79, -3.67), 0.04)
-	asset(host, "chairDesk", Vector3(-3.5, 0, -2.7), 1.0)
+	# These seating models face +Z by default; the desk and coffee table are toward -Z.
+	asset(host, "chairDesk", Vector3(-3.4, 0, -2.7), 1.0, PI)
 	asset(host, "lampRoundTable", Vector3(-4.22, 0.78, -4.0), 0.48)
 	host.station("업무 PC", Vector3(-3.4, 1.1, -3.1), Color("92c8b6"))
 	asset(host, "kitchenCabinetDrawer", Vector3(3.3, 0, -4.3), 0.95)
@@ -77,7 +78,7 @@ static func furnish(host: Node3D) -> void:
 	asset(host, "lampRoundTable", Vector3(-2.4, 0.6, 3.7), 0.45)
 	host.station("침대", Vector3(-2.6, 0.9, 2.3), Color("92c8b6"))
 	asset(host, "rugRectangle", Vector3(0, 0.02, 2.6), 0.035)
-	asset(host, "loungeSofa", Vector3(0, 0, 3.8), 1.05)
+	asset(host, "loungeSofa", Vector3(0, 0, 3.8), 1.05, PI)
 	collider(host, Vector3(0, 0.48, 3.8), Vector3(2.5, 0.96, 1))
 	asset(host, "tableCoffee", Vector3(0, 0, 2.0), 0.44)
 	collider(host, Vector3(0, 0.22, 2), Vector3(1.6, 0.44, 0.8))
