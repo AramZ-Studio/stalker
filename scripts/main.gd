@@ -8,6 +8,8 @@ const FullGame = preload("res://scripts/full_game.gd")
 const Presence = preload("res://scripts/presence.gd")
 const FootAudio = preload("res://scripts/night_audio.gd")
 const ScenarioLab = preload("res://scripts/scenario_lab.gd")
+const StatusHUD = preload("res://scripts/status_hud.gd")
+var status_hud: PanelContainer
 var lab: RefCounted
 var presence: Node
 var full: RefCounted
@@ -49,6 +51,9 @@ func _ready() -> void:
 	presence = Presence.new()
 	add_child(presence)
 	presence.setup(self)
+	status_hud = StatusHUD.new()
+	status_hud.theme = modal.get_parent().theme
+	ui.add_child(status_hud)
 	demo = Demo.new(self)
 	night = DoorNight.new(self)
 	full = FullGame.new(self)
@@ -86,6 +91,10 @@ func _ready() -> void:
 		call_deferred("test_lab")
 	elif "--capture-lab" in OS.get_cmdline_user_args():
 		call_deferred("capture_lab")
+	elif "--test-hud" in OS.get_cmdline_user_args():
+		call_deferred("test_hud")
+	elif "--capture-hud" in OS.get_cmdline_user_args():
+		call_deferred("capture_hud")
 
 func material(color: Color, glow: bool = false) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -520,6 +529,7 @@ func _process(delta: float) -> void:
 
 func update_hud() -> void:
 	var immersive: bool = full != null and full.active
+	status_hud.refresh(game, immersive and not modal.visible and not game.ended and not presence.view in ["death", "opening", "activity"])
 	hud.get_parent().visible = not immersive and not modal.visible
 	notice.visible = not immersive and not modal.visible
 	reticle.visible = not modal.visible and not presence.blocked()
@@ -1348,4 +1358,40 @@ func capture_lab() -> void:
 	await capture_presence_frame("lab_campaign")
 	full.stop()
 	print("LAB_CAPTURE_OK")
+	get_tree().quit()
+
+func test_hud() -> void:
+	start_demo()
+	close_panel()
+	await get_tree().physics_frame
+	update_hud()
+	assert(status_hud.visible and status_hud.hunger_bar.value == game.hunger)
+	assert(status_hud.wallet_label.text.contains("24,000"))
+	assert(status_hud.meal_label.text.contains("최소 한 끼 필요"))
+	game.money -= 1000
+	game.eat()
+	update_hud()
+	assert(status_hud.wallet_label.text.contains("23,000") and status_hud.meal_label.text.contains("완료"))
+	full.observe("현관 렌즈")
+	await get_tree().physics_frame
+	update_hud()
+	assert(status_hud.visible)
+	assert(status_hud.get_rect().size.x < 320 and status_hud.get_rect().size.y < 160)
+	full_phone()
+	update_hud()
+	assert(not status_hud.visible)
+	show_intro()
+	update_hud()
+	assert(not status_hud.visible)
+	print("STATUS_HUD_OK: live gauges, wallet, daily meal, compact size, observation visibility and menu hiding")
+	get_tree().quit()
+
+func capture_hud() -> void:
+	start_demo()
+	close_panel()
+	await capture_presence_frame("hud_room")
+	full.observe("인터폰")
+	await capture_presence_frame("hud_observation")
+	full.stop()
+	print("HUD_CAPTURE_OK")
 	get_tree().quit()
