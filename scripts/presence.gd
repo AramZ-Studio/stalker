@@ -380,7 +380,8 @@ func update(delta: float) -> void:
 		var moving: bool = Vector2(velocity.x, velocity.z).length() > 0.08
 		var motion: float = 1.0 if host.camera_motion else 0.0
 		var breath: float = sin(elapsed * 1.7) * 0.003 * motion
-		var bob: float = (absf(sin(host.walk_phase)) - 0.5) * 0.022 * motion if moving else 0.0
+		var weight := 1.6 if host.movement_gait == "run" else (0.45 if host.movement_gait == "quiet" else 1.0)
+		var bob: float = (absf(sin(host.walk_phase)) - 0.5) * 0.022 * motion * weight if moving else 0.0
 		var desired := Vector3(-sway.x * motion, 1.6 + breath + bob, 0)
 		host.camera.position = host.camera.position.lerp(desired, minf(delta * 12, 1))
 		host.camera.rotation.z = lerpf(host.camera.rotation.z, clampf(-host.player.basis.inverse().x.dot(velocity) * 0.006, -0.015, 0.015) * motion, minf(delta * 7, 1))

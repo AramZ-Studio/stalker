@@ -6,6 +6,7 @@ const Demo = preload("res://scripts/demo.gd")
 const DoorNight = preload("res://scripts/door_night.gd")
 const FullGame = preload("res://scripts/full_game.gd")
 const Presence = preload("res://scripts/presence.gd")
+const FootAudio = preload("res://scripts/night_audio.gd")
 var presence: Node
 var full: RefCounted
 var night: RefCounted
@@ -35,6 +36,7 @@ var preferred_fov := 75.0
 var camera_motion := true
 var walk_phase := 0.0
 var step_distance := 0.0
+var movement_gait := "walk"
 var station_labels: Dictionary = {}
 var activity_transition := false
 var retired_snapshots: Array[Dictionary] = []
@@ -73,6 +75,10 @@ func _ready() -> void:
 		call_deferred("test_presence")
 	elif "--capture-presence" in OS.get_cmdline_user_args():
 		call_deferred("capture_presence")
+	elif "--test-movement" in OS.get_cmdline_user_args():
+		call_deferred("test_movement")
+	elif "--capture-week" in OS.get_cmdline_user_args():
+		call_deferred("capture_week")
 
 func material(color: Color, glow: bool = false) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -379,9 +385,9 @@ func close_panel() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func show_intro() -> void:
-	panel("OPEN UP · 문열어 / 생활과 문밖", "혼자 사는 재택 개발자. 밤마다 누군가 찾아오지만 생활은 계속해야 한다.\n일해서 생활비를 벌고, 먹고 자고, 필요한 물품을 받아라.\n\n주문·대화·소리·정지 화면을 연결해 문을 열지 판단하라.\n증거를 제보하면 검거가 앞당겨진다. 그때까지 버티는 것이 목표다.\n\nWASD 이동 · E 확인 · Tab 휴대폰 · J 기록 · Esc 메뉴\n시간은 업무·식사·수면·대기·외출 등 행동으로 흐른다.")
-	button("자유 시연 · 생활과 문밖", func(): full.start())
-	button("첫날 밤 · 세 번의 방문", func(): full.start_first_night())
+	panel("OPEN UP · 문열어 / 일주일 생존", "혼자 사는 재택 개발자. 밤마다 누군가 찾아오지만 생활은 계속해야 한다.\n\n1일차 00시부터 7일차 자정까지 살아남기.\n매일 최소 한 끼를 먹고, 일하고 자며 생활을 유지하자.\n주문·대화·소리·정지 화면을 비교해 문을 열지 판단하라.\n증거를 제보하면 순찰이 강화된다.\n\nWASD 걷기 · Shift 달리기 · Ctrl 천천히 걷기\nE 확인 · Tab 휴대폰 · J 기록 · Esc 메뉴\n시간은 생활 행동과 기다리기를 선택할 때만 흐른다.")
+	button("일주일 생존 · 매일 한 끼", func(): full.start())
+	button("기존 첫날 밤 테스트", func(): full.start_first_night())
 	button("현관 연출만 짧게 체험", func(): night.start())
 	button("생활 시스템 시연 · 기존 버전", close_panel)
 	button("사망 시연 · 주문하지 않은 방문", func(): demo.start("death"))
@@ -429,26 +435,34 @@ func _physics_process(delta: float) -> void:
 		if Input.is_physical_key_pressed(KEY_A): direction.x -= 1
 		if Input.is_physical_key_pressed(KEY_D): direction.x += 1
 		direction = player.basis * direction.normalized()
-		var speed := 1.15 if Input.is_physical_key_pressed(KEY_SHIFT) else 2.5
+		movement_gait = gait_for_keys(Input.is_physical_key_pressed(KEY_SHIFT), Input.is_physical_key_pressed(KEY_CTRL))
+		var profile: Dictionary = FootAudio.movement_profile(movement_gait)
+		var speed: float = profile.speed
 		var acceleration := 20.0 if direction.is_zero_approx() else 11.0
 		player.velocity.x = move_toward(player.velocity.x, direction.x * speed, acceleration * delta)
 		player.velocity.z = move_toward(player.velocity.z, direction.z * speed, acceleration * delta)
 		player.velocity.y -= 12 * delta
 		player.move_and_slide()
 		var travel := Vector2(player.get_real_velocity().x, player.get_real_velocity().z).length() * delta
-		walk_phase += travel * 7.0
+		walk_phase += travel / float(profile.stride) * PI
 		step_distance += travel
-		if step_distance > 0.85 and player.is_on_floor():
-			step_distance = 0
-			if full != null and full.active: full.audio.footstep()
+		if step_distance >= float(profile.stride) and player.is_on_floor():
+			step_distance -= float(profile.stride)
+			if full != null and full.active: full.audio.footstep(movement_gait)
+			elif night != null and night.active: night.audio.footstep(movement_gait)
+		if travel < 0.00001: step_distance = 0
 		focused = find_focused()
 		prompt.text = "E  ·  " + focused if not focused.is_empty() else ""
 	else:
 		player.velocity = Vector3.ZERO
+		step_distance = 0
 		if not presence.blocked(): camera.position.y = lerpf(camera.position.y, 1.6, minf(1, delta * 12))
 	for label_name in station_labels:
 		station_labels[label_name].visible = not modal.visible and focused == label_name
 	update_hud()
+
+func gait_for_keys(sprint: bool, quiet: bool) -> String:
+	return "quiet" if quiet else ("run" if sprint else "walk")
 
 func find_focused() -> String:
 	var result := ""
@@ -487,7 +501,7 @@ func update_hud() -> void:
 	if modal.visible:
 		hud.text += "\n%s %.1f시간 · 신고 %d/%d" % ["아침까지" if game.first_night else "검거까지", maxf(0, game.deadline - game.clock), game.reported.size(), 3 if game.suspense else 2]
 	else:
-		hud.text += "\nShift 조심히 걷기 · E 확인 · Tab 휴대폰 · Esc 설정"
+		hud.text += "\nShift 달리기 · Ctrl 천천히 · E 확인 · Tab 휴대폰 · Esc 설정"
 	if not game.journal.is_empty():
 		notice.text = game.journal[0]
 	if not game.suspense and (game.visitor == "stalker" or game.visitor == "courier"):
@@ -573,6 +587,8 @@ func after_action() -> void:
 		shade.hide()
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		presence.say("초인종. 하던 일을 멈췄다. 현관을 확인하자. 남은 행동은 휴대폰에서 재개할 수 있다." if game.pending > 0 else (game.journal[0] if not game.journal.is_empty() else "시간이 흘렀다."), 5)
+		if game.weekly_survival and game.meals_today == 0 and fmod(game.clock, 24) >= 20:
+			presence.say("아직 오늘 식사를 하지 않았다. 자정 전에 최소 한 끼를 먹어야 한다.", 6)
 	elif game.pending > 0:
 		panel("딩동.   /   %s" % game.stamp(), "문밖에 누군가 있다. %s %.1f시간이 남았다.\n문을 열기 전에 주문 내역과 방문자의 말을 비교하자." % [game.activity, game.pending])
 		if game.suspense:
@@ -689,6 +705,7 @@ func phone() -> void:
 func food_menu() -> void:
 	if game.suspense:
 		compact_panel("식료품 / 식사", "간편식 %d개 · 좋아하는 음식 %d개\n식사는 30분. 좋아하는 음식은 정신력을 더 회복한다." % [game.food, game.good_food])
+		if game.weekly_survival: paragraph(game.meal_status())
 		button("간편식 먹기", func(): full_eat(false))
 		button("좋아하는 음식 먹기", func(): full_eat(true))
 		button("돌아가기", close_panel)
@@ -725,6 +742,8 @@ func full_phone() -> void:
 	elif game.parcel:
 		info = "%s / 번호 %s / 미회수 · 남은 회수 시간 %.1f시간" % [game.product_name, game.order_number, maxf(0, 3 - game.clock + game.parcel_since)]
 	compact_panel("휴대폰 · Esc 닫기", "%s · 잔액 %d원\n공복 %d · 정신력 %d\n간편식 %d개 · 좋아하는 음식 %d개\n%s\n확보 증거 %d개 · 신고 %d개\n일반 물품은 낮 배송, 음식은 약 45분 후 도착." % [game.stamp(), game.money, int(game.hunger), int(game.sanity), game.food, game.good_food, info, game.evidence.size(), game.reported.size()], true)
+	if game.weekly_survival:
+		paragraph("목표: 7일차 자정까지 생존\n" + game.meal_status())
 	presence.set_gesture("phone")
 	for key in State.CATALOG.keys():
 		button("%s 주문 · %d원" % [State.CATALOG[key].name, game.price(key)], func():
@@ -733,7 +752,7 @@ func full_phone() -> void:
 	button("확보한 증거 경찰에 전달", func():
 		var count: int = game.report()
 		if game.ended: ending()
-		else: message("경찰 제보", "새 증거 %d개 전달. 검거 예상 %d시간 단축." % [count, count * 6], full_phone))
+		else: message("경찰 제보", ("새 증거 %d개 전달. 이후 범인의 체류 시간은 최대 %d분 줄어든다. 목표는 7일차 자정까지 생존." % [count, game.reported.size() * 15]) if game.weekly_survival else ("새 증거 %d개 전달. 검거 예상 %d시간 단축." % [count, count * 6]), full_phone))
 	if game.camera_ready:
 		button("설치한 카메라의 녹화 확인", func():
 			var recorded: bool = game.collect("카메라")
@@ -755,7 +774,7 @@ func show_pause() -> void:
 	button("종료", func(): get_tree().quit())
 
 func show_settings() -> void:
-	panel("시선 · 화면 설정", "Shift 천천히 걷기 · 설정은 현재 실행 동안 유지됩니다.")
+	panel("시선 · 화면 설정", "Shift 달리기 · Ctrl 천천히 걷기 · 설정은 현재 실행 동안 유지됩니다.")
 	paragraph("마우스 감도")
 	var sensitivity := HSlider.new()
 	sensitivity.min_value = 0.0005
@@ -1167,4 +1186,42 @@ func capture_presence() -> void:
 	await capture_presence_frame("presence_encounter", 0.95)
 	full.stop()
 	print("PRESENCE_CAPTURE_OK")
+	get_tree().quit()
+
+func test_movement() -> void:
+	assert(gait_for_keys(false, false) == "walk")
+	assert(gait_for_keys(true, false) == "run")
+	assert(gait_for_keys(false, true) == "quiet")
+	assert(gait_for_keys(true, true) == "quiet")
+	var walk: Dictionary = FootAudio.movement_profile("walk")
+	var run: Dictionary = FootAudio.movement_profile("run")
+	var quiet: Dictionary = FootAudio.movement_profile("quiet")
+	assert(quiet.speed < walk.speed and walk.speed < run.speed)
+	assert(quiet.speed / quiet.stride < walk.speed / walk.stride and walk.speed / walk.stride < run.speed / run.stride)
+	assert(quiet.volume < walk.volume and walk.volume < run.volume)
+	var generator := FootAudio.new()
+	var left: AudioStreamWAV = generator.synth_step("walk", true)
+	var right: AudioStreamWAV = generator.synth_step("walk", false)
+	var fast: AudioStreamWAV = generator.synth_step("run", true)
+	var slow: AudioStreamWAV = generator.synth_step("quiet", true)
+	assert(left.stereo and left.data.size() == 7056 * 4)
+	assert(left.data != right.data and left.data != fast.data and left.data != slow.data)
+	var peak := 0
+	for i in range(0, left.data.size(), 2): peak = maxi(peak, absi(left.data.decode_s16(i)))
+	assert(peak > 100 and peak < 32767)
+	generator.free()
+	print("MOVEMENT_AUDIO_OK: default walk, Shift run, Ctrl quiet priority, distinct cadence and stereo heel/toe samples")
+	get_tree().quit()
+
+func capture_week() -> void:
+	full.start(13)
+	await capture_presence_frame("week_intro")
+	close_panel()
+	full_phone()
+	await capture_presence_frame("week_phone")
+	for gait in ["quiet", "walk", "run"]:
+		full.audio.footstep(gait)
+		await get_tree().create_timer(0.4).timeout
+	full.stop()
+	print("WEEK_CAPTURE_AUDIO_OK")
 	get_tree().quit()

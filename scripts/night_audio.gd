@@ -9,6 +9,13 @@ var muted := false
 var channels: Dictionary = {}
 var channel_tweens: Dictionary = {}
 var foot: AudioStreamPlayer
+var left_foot := true
+
+static func movement_profile(gait: String) -> Dictionary:
+	match gait:
+		"run": return {"speed": 3.7, "stride": 1.1, "volume": -12.0, "pitch": 1.05}
+		"quiet": return {"speed": 0.85, "stride": 0.58, "volume": -29.0, "pitch": 0.93}
+	return {"speed": 1.9, "stride": 0.8, "volume": -18.0, "pitch": 1.0}
 
 func _ready() -> void:
 	room = AudioStreamPlayer.new()
@@ -36,6 +43,10 @@ func _ready() -> void:
 		return
 	for key in ["hum", "bell", "knock", "shuffle", "steps_away", "steps_near", "heart", "unlock", "death", "hiss", "foot", "rustle", "typing"]:
 		sounds[key] = synth(key)
+	for gait in ["walk", "run", "quiet"]:
+		for side in ["left", "right"]:
+			var key: String = "foot_%s_%s" % [gait, side]
+			sounds[key] = synth_step(gait, side == "left")
 	room.stream = sounds.hum
 	room.play()
 
@@ -92,11 +103,39 @@ func cue(kind: String) -> void:
 		movement.tween_property(channel, "position", Vector3(1.3, 1.4, -4.6), 0.8)
 		channel_tweens[kind] = movement
 
-func footstep() -> void:
-	if muted or not sounds.has("foot"): return
-	foot.stream = sounds.foot
-	foot.pitch_scale = randf_range(0.94, 1.04)
+func synth_step(gait: String, left: bool) -> AudioStreamWAV:
+	var rate := 22050
+	var count := int(rate * 0.32)
+	var bytes := PackedByteArray()
+	bytes.resize(count * 4)
+	var noise := RandomNumberGenerator.new()
+	noise.seed = 7301 + (13 if left else 29)
+	var filtered := 0.0
+	var gain := 1.5 if gait == "run" else (0.65 if gait == "quiet" else 1.0)
+	for i in range(count):
+		var t := float(i) / rate
+		filtered = filtered * 0.78 + noise.randf_range(-1, 1) * 0.22
+		var heel := sin(TAU * (74 if gait == "run" else 92) * t) * exp(-t * 37) * 0.34
+		var toe := sin(TAU * 136 * maxf(0, t - 0.065)) * exp(-maxf(0, t - 0.065) * 48) * 0.17 if t >= 0.065 else 0.0
+		var value := (heel + toe + filtered * exp(-t * 18) * 0.16) * gain
+		bytes.encode_s16(i * 4, int(clampf(value * (0.95 if left else 0.72), -1, 1) * 22000))
+		bytes.encode_s16(i * 4 + 2, int(clampf(value * (0.72 if left else 0.95), -1, 1) * 22000))
+	var result := AudioStreamWAV.new()
+	result.format = AudioStreamWAV.FORMAT_16_BITS
+	result.stereo = true
+	result.mix_rate = rate
+	result.data = bytes
+	return result
+
+func footstep(gait: String = "walk") -> void:
+	var key := "foot_%s_%s" % [gait, "left" if left_foot else "right"]
+	if muted or not sounds.has(key): return
+	var profile := movement_profile(gait)
+	foot.stream = sounds[key]
+	foot.volume_db = profile.volume
+	foot.pitch_scale = float(profile.pitch) * randf_range(0.975, 1.025)
 	foot.play()
+	left_foot = not left_foot
 
 func stop_cue(kind: String) -> void:
 	if channels.has(kind): channels[kind].stop()

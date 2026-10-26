@@ -17,7 +17,7 @@ func reach(s: RefCounted, target: float, kind: String = "대기") -> void:
 
 func fresh() -> RefCounted:
 	var s = State.new()
-	s.enable_full_game(13)
+	s.enable_full_game(13, false)
 	s.threat_times[0] = 22.0
 	s.threat_times[1] = 46.0
 	return s

@@ -18,14 +18,14 @@ var hold_cued := false
 func _init(owner_node: Node3D) -> void:
 	host = owner_node
 
-func start(seed_value: int = -1) -> void:
+func start(seed_value: int = -1, weekly: bool = true) -> void:
 	if is_instance_valid(audio):
 		audio.stop_all()
 		audio.queue_free()
 	active = true
 	death_in = -1
 	host.game = State.new()
-	host.game.enable_full_game(seed_value)
+	host.game.enable_full_game(seed_value, weekly)
 	host.presence.reset()
 	audio = Audio.new()
 	host.add_child(audio)
@@ -34,11 +34,11 @@ func start(seed_value: int = -1) -> void:
 		if child is OmniLight3D:
 			child.light_energy = 0.55
 			child.shadow_enabled = true
-	host.panel("OPEN UP · 문열어 / 생활과 문밖", "일하고, 먹고, 잠들어야 한다. 문밖의 누군가는 그것을 알고 있다.\n\n인터폰은 기기 화면에서, 렌즈는 눈을 가까이 대어 확인한다.\n주문·대답·소리를 비교하고 필요한 물건을 회수하자.\n시간은 생활 행동과 기다리기를 선택할 때만 흐른다.\n\nWASD 이동 · Shift 조심히 걷기 · E 상호작용\n현관: 1 인터폰 / 2 렌즈 / 3 듣기 / 4 대화\nE 길게 문 열기 · X 물러나기 · Tab 휴대폰")
+	host.panel("OPEN UP · 문열어 / 일주일 생존", "1일차 00시부터 7일차 자정까지 살아남아야 한다.\n매일 최소 한 끼. 한 끼도 먹지 않고 자정을 넘기면 실패한다.\n\n일해서 식량과 필요한 물품을 주문하고, 방문자의 말과 소리를 비교하자.\n제보는 순찰을 강화해 이후 범인이 머무는 시간을 줄인다.\n시간은 생활 행동과 기다리기를 선택할 때만 흐른다.\n\nWASD 걷기 · Shift 달리기 · Ctrl 천천히 걷기 · E 상호작용\n현관: 1 인터폰 / 2 렌즈 / 3 듣기 / 4 대화\nE 길게 문 열기 · X 물러나기 · Tab 오늘 식사와 주문 확인")
 	host.button("생활을 시작한다", host.close_panel)
 
 func start_first_night() -> void:
-	start(13)
+	start(13, false)
 	host.game.first_night = true
 	host.game.deadline = 30.0
 	host.game.threat_times[0] = 21.5

@@ -49,6 +49,11 @@ var asked_to_leave := false
 var visit_style := 0
 var first_night := false
 var mail_waiting := false
+const WEEK_END := 168.0
+var weekly_survival := false
+var meal_day := 0
+var meals_today := 0
+var meal_history: Dictionary = {}
 const CATALOG := {
 	"pantry": {"name": "생수·간편식 3개", "price": 12000},
 	"meal": {"name": "좋아하는 따뜻한 음식", "price": 15000},
@@ -58,16 +63,22 @@ const CATALOG := {
 	"light": {"name": "고광도 손전등", "price": 36000}
 }
 
-func enable_full_game(seed_value: int = -1) -> void:
+func enable_full_game(seed_value: int = -1, weekly: bool = true) -> void:
 	suspense = true
+	weekly_survival = weekly
 	if seed_value < 0: rng.randomize()
 	else: rng.seed = seed_value
-	deadline = 78.0
+	clock = 0.0 if weekly else START
+	last_walk = clock
+	deadline = WEEK_END if weekly else 78.0
+	meal_day = int(clock / 24)
+	meals_today = 0
+	meal_history.clear()
 	food = 1
 	hunger = 32.0
-	for day in range(5):
+	for day in range(8):
 		threat_times[day] = day * 24.0 + rng.randi_range(84, 93) * 0.25
-	log_entry("경찰: ‘수색 중입니다. 4일차 06시까지 버텨주세요. 제보가 있으면 더 빨라집니다.’")
+	log_entry("7일차 자정까지 살아남아야 한다. 매일 최소 한 끼를 먹자. 제보하면 순찰이 강화된다." if weekly else "경찰: ‘수색 중입니다. 4일차 06시까지 버텨주세요. 제보가 있으면 더 빨라집니다.’")
 	log_entry("남은 간편식 1개. 일해서 생활비를 벌고, 필요한 물품을 주문해야 한다.")
 
 func price(key: String) -> int:
@@ -140,6 +151,7 @@ func listen() -> String:
 	return "형광등이 낮게 웅웅거린다. 가까운 곳에서는 발소리도 옷 스치는 소리도 들리지 않는다."
 
 func eat(tasty: bool = false) -> bool:
+	if ended: return false
 	if tasty:
 		if good_food <= 0: return false
 		good_food -= 1
@@ -150,10 +162,17 @@ func eat(tasty: bool = false) -> bool:
 		food -= 1
 		hunger = maxf(0, hunger - 42)
 		sanity = minf(100, sanity + 3)
-	log_entry("좋아하는 음식을 먹고 조금 마음이 풀렸다." if tasty else "비축한 간편식을 먹었다.")
+	if weekly_survival: meals_today += 1
+	log_entry(("좋아하는 음식을 먹고 조금 마음이 풀렸다." if tasty else "비축한 간편식을 먹었다.") + (" 오늘 식사 %d회 / 최소 1회." % meals_today if weekly_survival else ""))
 	return true
 
+func meal_status() -> String:
+	if not weekly_survival: return ""
+	if won: return "7일 모두 식사 완료"
+	return "오늘 식사 %d회 / 최소 1회 · %s" % [meals_today, "완료" if meals_today > 0 else "자정 전 식사 필요"]
+
 func stamp() -> String:
+	if weekly_survival and clock >= WEEK_END: return "7일차 24:00"
 	return "%d일차 %02d:%02d" % [int(clock / 24.0) + 1, int(fmod(clock, 24.0)), int(fmod(clock * 60.0, 60.0))]
 
 func log_entry(message: String) -> void:
@@ -212,6 +231,8 @@ func advance(hours: float, kind: String = "대기") -> void:
 	var remaining := hours
 	while remaining > 0.001 and not ended:
 		var step := minf(0.25, remaining)
+		var midnight := float(int(clock / 24) + 1) * 24
+		if weekly_survival: step = minf(step, minf(midnight - clock, deadline - clock))
 		clock += step
 		remaining -= step
 		activity_hours += step
@@ -227,6 +248,21 @@ func advance(hours: float, kind: String = "대기") -> void:
 		elif kind == "수면":
 			awake_hours = maxf(0, awake_hours - step * 2)
 			sanity = minf(100.0, sanity + sleep_recovery * step)
+		if weekly_survival and clock >= midnight - 0.000001:
+			clock = midnight
+			meal_history[meal_day] = meals_today
+			if meals_today == 0:
+				finish(false, "%d일차에 한 끼도 먹지 못했다. 하루 최소 한 번은 식사해야 한다." % (meal_day + 1))
+				break
+			if clock < deadline:
+				meal_day = int(clock / 24)
+				meals_today = 0
+				log_entry("새로운 날. 오늘도 최소 한 끼를 먹어야 한다.")
+		if weekly_survival and meals_today == 0 and fmod(clock, 24) >= 20:
+			var warning := "meal_warning_%d" % meal_day
+			if not events.has(warning):
+				events.append(warning)
+				log_entry("아직 오늘 식사를 하지 않았다. 자정 전에 한 끼를 먹어야 한다.")
 		if parcel and clock - parcel_since >= 3.0:
 			parcel = false
 			log_entry("문 앞에 3시간 동안 둔 물품이 사라졌다.")
@@ -234,7 +270,7 @@ func advance(hours: float, kind: String = "대기") -> void:
 		if sanity <= 0.0 or hunger >= 100.0:
 			finish(false, "더는 버틸 수 없었다. " + ("공복이 한계에 도달했다." if hunger >= 100.0 else "정신력이 바닥났다."))
 		elif clock >= deadline:
-			finish(true, "첫날 밤을 버텼다. 날이 밝았다. 경찰의 수색은 계속된다." if first_night else "경찰이 용의자를 검거했다. 이제, 잠들 수 있다.")
+			finish(true, "일주일을 버텼다. 7일 동안 매일 식사를 챙겼고, 경찰이 용의자를 검거했다." if weekly_survival else ("첫날 밤을 버텼다. 날이 밝았다. 경찰의 수색은 계속된다." if first_night else "경찰이 용의자를 검거했다. 이제, 잠들 수 있다."))
 		elif bell:
 			pending = remaining
 			if remaining > 0.001:
@@ -280,12 +316,12 @@ func update_full_events() -> bool:
 		asked_to_leave = false
 		visit_style = mini(day, 2)
 		visit_started = clock
-		visit_until = clock + 1
+		visit_until = clock + (maxf(0.25, 1.0 - reported.size() * 0.25) if weekly_survival else 1.0)
 		if camera_ready: recorded_visit = true
 		log_entry(["초인종. ‘문 앞입니다’라는 메시지. 젖은 상자가 카메라 아래 보인다.", "초인종. ‘오늘은 늦게 주무시네요.’ 잠깐 뒤 배달이라는 말이 이어진다.", "초인종이 울리기 전, 현관 손잡이에서 금속이 스쳤다. ‘문 앞입니다.’"][mini(day, 2)])
 		sound_events.append("bell")
 		bell = true
-	if visitor == "stalker" and clock >= visit_started + 0.5 and not events.has(key + "_repeat"):
+	if visitor == "stalker" and clock < visit_until and clock >= visit_started + 0.5 and not events.has(key + "_repeat"):
 		events.append(key + "_repeat")
 		sound_events.append("knock")
 		log_entry("똑똑. 문 옆에서 다시 두드린다.")
@@ -364,16 +400,18 @@ func collect(source: String) -> bool:
 	return true
 
 func report() -> int:
+	if ended: return 0
 	var count := 0
 	for clue in evidence:
 		if not reported.has(clue):
 			reported.append(clue)
 			count += 1
-	if not first_night: deadline -= count * 6.0
+	if not first_night and not weekly_survival: deadline -= count * 6.0
 	if count > 0:
-		if first_night: log_entry("경찰에 증거를 전달했다. ‘아침까지 문단속하세요. 순찰을 보내겠습니다.’")
+		if weekly_survival: log_entry("증거 %d개 전달. 순찰 강화로 이후 범인의 체류 시간이 짧아진다. 생존 목표는 7일차 자정이다." % count)
+		elif first_night: log_entry("경찰에 증거를 전달했다. ‘아침까지 문단속하세요. 순찰을 보내겠습니다.’")
 		else: log_entry("증거 %d개 전달. 경찰: ‘순찰과 수색을 앞당기겠습니다.’ 검거 예상 %d시간 단축." % [count, count * 6])
-	if clock >= deadline:
+	if clock >= deadline and not weekly_survival:
 		finish(true, "제보한 증거로 경찰이 용의자를 검거했다. 이제, 잠들 수 있다.")
 	return count
 
